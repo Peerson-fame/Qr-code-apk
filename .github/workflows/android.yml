@@ -2,15 +2,14 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build QR Master Grid APK
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -18,56 +17,113 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install PySide6 and app dependencies
+      - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install PySide6 qrcode Pillow
 
-      - name: Download Android SDK/NDK for PySide6
+      - name: Download Android SDK and NDK
         run: |
-          git clone --depth 1 https://code.qt.io/pyside/pyside-setup
+          git clone --depth 1 https://code.qt.io/pyside/pyside-setup.git
           python pyside-setup/tools/cross_compile_android/main.py \
-            --download-only --skip-update --auto-accept-license
+            --download-only \
+            --skip-update \
+            --auto-accept-license
 
       - name: Download Android PySide6 wheels
         run: |
           mkdir -p android-wheels
           cd android-wheels
-          qtpip download PySide6 --android --arch aarch64
 
-      - name: Locate wheels
+          qtpip download PySide6 \
+            --android \
+            --arch aarch64
+
+      - name: Find Android wheels
         id: wheels
         shell: bash
         run: |
-          PYSIDE=$(find "$GITHUB_WORKSPACE/android-wheels" -name 'PySide6-*-android_aarch64.whl' | head -n 1)
-          SHIBOKEN=$(find "$GITHUB_WORKSPACE/android-wheels" -name 'shiboken6-*-android_aarch64.whl' | head -n 1)
-          test -n "$PYSIDE"
-          test -n "$SHIBOKEN"
-          echo "pyside=$PYSIDE" >> "$GITHUB_OUTPUT"
-          echo "shiboken=$SHIBOKEN" >> "$GITHUB_OUTPUT"
+          echo "Looking for PySide6 Android wheels..."
+
+          PYSIDE6_WHEEL="$(find "$GITHUB_WORKSPACE/android-wheels" \
+            -type f \
+            -name 'PySide6-*-android_aarch64.whl' \
+            | head -n 1)"
+
+          SHIBOKEN6_WHEEL="$(find "$GITHUB_WORKSPACE/android-wheels" \
+            -type f \
+            -name 'shiboken6-*-android_aarch64.whl' \
+            | head -n 1)"
+
+          if [ -z "$PYSIDE6_WHEEL" ]; then
+            echo "ERROR: PySide6 Android wheel not found."
+            find "$GITHUB_WORKSPACE/android-wheels" -type f
+            exit 1
+          fi
+
+          if [ -z "$SHIBOKEN6_WHEEL" ]; then
+            echo "ERROR: shiboken6 Android wheel not found."
+            find "$GITHUB_WORKSPACE/android-wheels" -type f
+            exit 1
+          fi
+
+          echo "PySide6 wheel:"
+          echo "$PYSIDE6_WHEEL"
+
+          echo "shiboken6 wheel:"
+          echo "$SHIBOKEN6_WHEEL"
+
+          echo "pyside6=$PYSIDE6_WHEEL" >> "$GITHUB_OUTPUT"
+          echo "shiboken6=$SHIBOKEN6_WHEEL" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare application
+        run: |
+          echo "Repository contents:"
+          find . -maxdepth 3 -type f | sort
+
+          if [ ! -f "main.py" ]; then
+            echo "ERROR: main.py was not found in the repository root."
+            exit 1
+          fi
 
       - name: Build APK
         run: |
           pyside6-android-deploy \
             --name "QR Master Grid" \
-            --wheel-pyside="${{ steps.wheels.outputs.pyside }}" \
-            --wheel-shiboken="${{ steps.wheels.outputs.shiboken }}" \
+            --wheel-pyside="${{ steps.wheels.outputs.pyside6 }}" \
+            --wheel-shiboken="${{ steps.wheels.outputs.shiboken6 }}" \
             --ndk-path="$HOME/.pyside6-android-deploy/android-ndk" \
             --sdk-path="$HOME/.pyside6-android-deploy/android-sdk" \
             --force \
             --verbose
 
-      - name: Find APK
+      - name: Locate APK
         id: apk
         shell: bash
         run: |
-          APK=$(find "$GITHUB_WORKSPACE" -type f -name '*.apk' | head -n 1)
-          test -n "$APK"
+          echo "Searching for APK..."
+
+          APK="$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was produced."
+            echo
+            echo "Files in workspace:"
+            find "$GITHUB_WORKSPACE" -type f | sort
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
           echo "path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: QR-Master-Grid-debug-apk
+          name: QR-Master-Grid-Android
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
